@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Phone, Settings, Plus, Trash2, User, ImagePlus, Camera, MessageCircle, Share2 } from 'lucide-react';
+import { Phone, Settings, Plus, Trash2, User, ImagePlus, Camera, MessageCircle, Share2, Pencil } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -33,11 +33,23 @@ const AVATAR_COLORS = [
 ];
 
 /* ═══ QUICK MESSAGES ═══ */
-const QUICK_MESSAGES = [
+const DEFAULT_MESSAGES = [
   { text: 'PUEDES VENIR', emoji: '🏠', color: 'bg-blue-500' },
   { text: 'TENGO HAMBRE', emoji: '🍽', color: 'bg-orange-500' },
   { text: 'POR FAVOR LLAMAME', emoji: '📞', color: 'bg-red-500' },
 ];
+
+function loadMessages() {
+  if (typeof window === 'undefined') return DEFAULT_MESSAGES;
+  try {
+    const saved = localStorage.getItem('mis-queridos-messages');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length === 3) return parsed;
+    }
+  } catch { /* */ }
+  return DEFAULT_MESSAGES;
+}
 
 /* ═══ HELPERS ═══ */
 function loadContacts(): Contact[] {
@@ -98,6 +110,7 @@ function resizeImage(file: File, maxPx = 300): Promise<string> {
 /* ═══ MAIN ═══ */
 export default function Home() {
   const [contacts, setContacts] = useState<Contact[]>(loadContacts);
+  const [messages, setMessages] = useState(loadMessages);
   const [myNumber, setMyNumber] = useState(loadMyNumber);
   const [showSettings, setShowSettings] = useState(false);
   const [editContact, setEditContact] = useState<Contact | null>(null);
@@ -105,6 +118,8 @@ export default function Home() {
   const [selectedMsg, setSelectedMsg] = useState('');
   const [editMyNumber, setEditMyNumber] = useState(false);
   const [myNumberDraft, setMyNumberDraft] = useState('');
+  const [editMessages, setEditMessages] = useState(false);
+  const [msgDrafts, setMsgDrafts] = useState(DEFAULT_MESSAGES.map(m => m.text));
   const { toast } = useToast();
 
   const cameraInputRef = useRef<HTMLInputElement>(null);
@@ -255,9 +270,9 @@ export default function Home() {
 
       {/* ═══ QUICK MESSAGES - 3 big buttons ═══ */}
       <section className="w-full grid grid-cols-3 gap-3 mb-5" aria-label="Mensajes rapidos">
-        {QUICK_MESSAGES.map((msg) => (
+        {messages.map((msg, i) => (
           <button
-            key={msg.text}
+            key={`msg-${i}`}
             onClick={() => handleMsgTap(msg.text)}
             className={`${msg.color} text-white rounded-2xl py-5 px-2 flex flex-col items-center justify-center gap-1 shadow-lg`}
             style={{ touchAction: 'manipulation', WebkitTapHighlightColor: 'transparent' }}
@@ -397,6 +412,61 @@ export default function Home() {
           <DialogHeader>
             <DialogTitle className="text-2xl">Configurar</DialogTitle>
           </DialogHeader>
+
+          {/* Edit Messages Section */}
+          <div className="p-4 rounded-2xl bg-orange-50 border border-orange-200 mb-3">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-semibold text-[#9A3412]">Mensajes Rapidos</p>
+              <button
+                onClick={() => { setMsgDrafts(messages.map(m => m.text)); setEditMessages(!editMessages); }}
+                className="flex items-center gap-1 text-sm text-orange-600 font-semibold"
+                style={{ touchAction: 'manipulation' }}
+              >
+                <Pencil className="h-3.5 w-3.5" /> {editMessages ? 'Cerrar' : 'Editar'}
+              </button>
+            </div>
+            {editMessages ? (
+              <div className="flex flex-col gap-2">
+                {msgDrafts.map((draft, i) => (
+                  <Input
+                    key={i}
+                    value={draft}
+                    onChange={(e) => {
+                      const nd = [...msgDrafts];
+                      nd[i] = e.target.value;
+                      setMsgDrafts(nd);
+                    }}
+                    placeholder={DEFAULT_MESSAGES[i].text}
+                    className="h-14 text-base rounded-2xl"
+                  />
+                ))}
+                <Button
+                  className="w-full h-12 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold"
+                  onClick={() => {
+                    const saved = msgDrafts.map((text, i) => ({
+                      ...DEFAULT_MESSAGES[i],
+                      text: text.trim() || DEFAULT_MESSAGES[i].text,
+                    }));
+                    setMessages(saved);
+                    localStorage.setItem('mis-queridos-messages', JSON.stringify(saved));
+                    setEditMessages(false);
+                    toast({ title: 'Mensajes guardados' });
+                  }}
+                >
+                  Guardar Mensajes
+                </Button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {messages.map((msg, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-lg">{msg.emoji}</span>
+                    <p className="text-base font-semibold text-[#431407]">{msg.text}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* My Number Section */}
           <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 mb-3">
