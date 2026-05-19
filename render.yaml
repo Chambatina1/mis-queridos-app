@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: mis-queridos-app
+    runtime: node
+    plan: free
+    region: oregon
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npx next start -p $PORT
+    envVars:
+      - key: NODE_ENV
+        value: production
