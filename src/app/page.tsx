@@ -148,12 +148,12 @@ export default function Home() {
   const [showSettings, setShowSettings] = useState(false);
   const [editContact, setEditContact] = useState<Contact | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState<'checking' | 'supported' | 'not_supported' | 'denied'>('checking');
   const { toast } = useToast();
 
   // Voice state
   const [listening, setListening] = useState(false);
   const [lastHeard, setLastHeard] = useState('');
-  const [voiceSupported, setVoiceSupported] = useState(false);
   const recognitionRef = useRef<any>(null);
   const contactsRef = useRef<Contact[]>(contacts);
   const onMatchRef = useRef<(c: Contact) => void>(() => {});
@@ -180,24 +180,18 @@ export default function Home() {
     }
   }, [toast]);
 
-  /* ── Call logic: single tap, uses <a> for better mobile behavior ── */
-  const makeCall = useCallback((contact: Contact) => {
-    if (!contact.phone) {
-      toast({
-        title: 'Sin numero',
-        description: `Configura el numero de ${contact.name} primero.`,
-        variant: 'destructive',
-      });
-      return;
-    }
-    const cleaned = contact.phone.replace(/[^\d+]/g, '');
-    // Use an <a> element for better mobile compatibility
-    const a = document.createElement('a');
-    a.href = `tel:${cleaned}`;
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => document.body.removeChild(a), 100);
+  /* ── Call logic: direct tel: link (no JS tricks) ── */
+  const getTelHref = useCallback((contact: Contact): string => {
+    if (!contact.phone) return '';
+    return `tel:${contact.phone.replace(/[^\d+]/g, '')}`;
+  }, []);
+
+  const handleNoPhone = useCallback((contact: Contact) => {
+    toast({
+      title: 'Sin numero',
+      description: `Configura el numero de ${contact.name} primero.`,
+      variant: 'destructive',
+    });
   }, [toast]);
 
   /* ── Voice call confirmation ── */
@@ -220,23 +214,33 @@ export default function Home() {
           clearInterval(countdownRef.current);
           const c = pendingCall;
           setPendingCall(null);
-          makeCall(c);
+          // Direct call via tel: href
+          window.location.href = `tel:${c.phone.replace(/[^\d+]/g, '')}`;
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(countdownRef.current);
-  }, [pendingCall, makeCall]);
+  }, [pendingCall]);
 
   /* ── Speech Recognition ── */
+  // Check support once on mount
   useEffect(() => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
-      setVoiceSupported(false);
+      setVoiceStatus('not_supported');
       return;
     }
-    setVoiceSupported(true);
+    setVoiceStatus('supported');
+  }, []);
+
+  // Start/stop recognition when voiceEnabled changes
+  useEffect(() => {
+    if (voiceStatus !== 'supported') return;
+
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
     onMatchRef.current = handleVoiceMatch;
 
     if (!voiceEnabled) {
@@ -247,7 +251,7 @@ export default function Home() {
 
     const recognition = new SR();
     recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.interimResults = false;
     recognition.lang = 'es-ES';
     recognition.maxAlternatives = 5;
 
@@ -258,7 +262,6 @@ export default function Home() {
         const transcript = result[0].transcript.trim();
         setLastHeard(transcript);
 
-        // Match against all contacts using fuzzy matching
         for (const contact of contactsRef.current) {
           if (!contact.phone) continue;
           if (voiceMatchesContact(transcript, contact.name)) {
@@ -271,26 +274,25 @@ export default function Home() {
 
     recognition.onerror = (event: any) => {
       console.log('Voice error:', event.error);
-      if (event.error === 'not-allowed') {
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         setListening(false);
         setVoiceEnabled(false);
-        toast({ title: 'Microfono bloqueado', description: 'Permite el acceso al microfono en tu navegador.', variant: 'destructive' });
+        setVoiceStatus('denied');
+        toast({
+          title: 'Microfono no permitido',
+          description: 'Ve a la configuracion del navegador y permite el microfono para esta pagina.',
+          variant: 'destructive',
+        });
         return;
-      }
-      // Auto-restart on other errors
-      if (voiceEnabled && !isStartingRef.current) {
-        setTimeout(() => {
-          try { recognition.start(); } catch { /* */ }
-        }, 2000);
       }
     };
 
     recognition.onend = () => {
+      // Always restart when enabled (recognition auto-stops after silence)
       if (voiceEnabled) {
-        // Auto-restart (recognition stops after silence)
         setTimeout(() => {
           try { recognition.start(); } catch { /* */ }
-        }, 300);
+        }, 200);
       } else {
         setListening(false);
       }
@@ -310,16 +312,30 @@ export default function Home() {
       isStartingRef.current = false;
       try { recognition.stop(); } catch { /* */ }
     };
-  }, [voiceEnabled, handleVoiceMatch, toast]);
+  }, [voiceEnabled, voiceStatus, handleVoiceMatch, toast]);
 
   const toggleVoice = useCallback(() => {
     if (voiceEnabled) {
       setVoiceEnabled(false);
-    } else {
+      setListening(false);
+      setLastHeard('');
+    } else if (voiceStatus === 'supported') {
       setVoiceEnabled(true);
       setLastHeard('');
+    } else if (voiceStatus === 'denied') {
+      toast({
+        title: 'Microfono bloqueado',
+        description: 'Permite el microfono en la configuracion del navegador y recarga la pagina.',
+        variant: 'destructive',
+      });
+    } else {
+      toast({
+        title: 'Voz no disponible',
+        description: 'Tu navegador no soporta comandos de voz. Usa Google Chrome en Android.',
+        variant: 'destructive',
+      });
     }
-  }, [voiceEnabled]);
+  }, [voiceEnabled, voiceStatus, toast]);
 
   /* ── Wake Lock: keep screen on ── */
   useEffect(() => {
@@ -454,12 +470,13 @@ export default function Home() {
               <button onClick={cancelVoiceCall} className="flex-1 h-14 rounded-2xl bg-gray-200 text-gray-700 font-bold text-lg active:scale-95 transition-transform">
                 Cancelar
               </button>
-              <button
-                onClick={() => { clearInterval(countdownRef.current); makeCall(pendingCall); setPendingCall(null); }}
-                className="flex-1 h-14 rounded-2xl bg-emerald-500 text-white font-bold text-lg active:scale-95 transition-transform flex items-center justify-center gap-2"
+              <a
+                href={getTelHref(pendingCall)}
+                onClick={() => { clearInterval(countdownRef.current); setPendingCall(null); }}
+                className="flex-1 h-14 rounded-2xl bg-emerald-500 text-white font-bold text-lg active:scale-95 transition-transform flex items-center justify-center gap-2 no-underline"
               >
                 <Phone className="h-6 w-6" /> Llamar ya
-              </button>
+              </a>
             </div>
           </div>
         </div>
@@ -470,27 +487,33 @@ export default function Home() {
         <div>
           <h1 className="text-2xl font-bold text-[#9A3412]">Mis Queridos</h1>
           <p className="text-sm text-[#9A3412]/50">
-            {voiceEnabled && listening ? 'Escuchando... di un nombre' : 'Toca para llamar'}
+            {voiceEnabled && listening ? 'Escuchando...' : 'Toca para llamar'}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {voiceSupported && (
-            <button
-              onClick={toggleVoice}
-              className={`h-14 w-14 rounded-full flex items-center justify-center shadow-sm border transition-all ${
-                voiceEnabled && listening
-                  ? 'bg-emerald-100 border-emerald-300'
-                  : 'bg-white/60 border-gray-200'
-              }`}
-              aria-label={listening ? 'Apagar voz' : 'Activar voz'}
-            >
-              {voiceEnabled && listening ? (
-                <Mic className="h-7 w-7 text-emerald-600 animate-pulse" />
-              ) : (
-                <MicOff className="h-7 w-7 text-gray-400" />
-              )}
-            </button>
-          )}
+          {/* Mic button - always visible, shows status */}
+          <button
+            onClick={toggleVoice}
+            className={`h-14 w-14 rounded-full flex items-center justify-center shadow-sm border transition-all ${
+              voiceEnabled && listening
+                ? 'bg-emerald-100 border-emerald-300'
+                : voiceStatus === 'denied'
+                  ? 'bg-red-100 border-red-300'
+                  : voiceStatus === 'not_supported'
+                    ? 'bg-gray-100 border-gray-300'
+                    : 'bg-white/60 border-gray-200'
+            }`}
+          >
+            {voiceEnabled && listening ? (
+              <Mic className="h-7 w-7 text-emerald-600 animate-pulse" />
+            ) : voiceStatus === 'not_supported' ? (
+              <MicOff className="h-7 w-7 text-gray-400" />
+            ) : voiceStatus === 'denied' ? (
+              <MicOff className="h-7 w-7 text-red-400" />
+            ) : (
+              <Mic className="h-7 w-7 text-gray-400" />
+            )}
+          </button>
           <button
             onClick={() => setShowSettings(true)}
             className="h-14 w-14 rounded-full bg-white/60 hover:bg-white shadow-sm border border-orange-200 flex items-center justify-center"
@@ -520,35 +543,75 @@ export default function Home() {
       )}
 
       {/* ═══ Contact Grid ═══ */}
+      {/* Voice not supported warning */}
+      {voiceStatus === 'not_supported' && (
+        <div className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-3 mb-3">
+          <p className="text-sm text-amber-800 font-medium">
+            La voz no funciona en este navegador. Usa Google Chrome en Android para comandos de voz.
+          </p>
+        </div>
+      )}
+
       <section className="w-full grid grid-cols-2 gap-4 flex-1">
-        {contacts.map((contact) => (
-          <button
-            key={contact.id}
-            onClick={() => makeCall(contact)}
-            className="flex flex-col items-center gap-2 p-3 rounded-3xl bg-white shadow-md border border-orange-100 hover:shadow-xl active:scale-[0.97] transition-all duration-150"
-          >
-            <div className="relative w-full aspect-square rounded-2xl overflow-hidden bg-orange-50">
-              {contact.photo ? (
-                <img src={contact.photo} alt={contact.name} className="w-full h-full object-cover" />
-              ) : (
-                <div className={`w-full h-full flex items-center justify-center ${getAvatarColor(contact.id)}`}>
-                  <span className="text-white text-7xl font-bold">{getInitial(contact.name)}</span>
+        {contacts.map((contact) => {
+          const telHref = getTelHref(contact);
+          const hasPhone = !!contact.phone;
+
+          // If has phone: use <a> tag (single tap, native tel: link)
+          // If no phone: use <button> (shows toast to configure)
+          if (hasPhone) {
+            return (
+              <a
+                key={contact.id}
+                href={telHref}
+                className="flex flex-col items-center gap-2 p-3 rounded-3xl bg-white shadow-md border border-orange-100 hover:shadow-xl active:scale-[0.97] transition-all duration-150 no-underline"
+              >
+                <div className="relative w-full aspect-square rounded-2xl overflow-hidden bg-orange-50">
+                  {contact.photo ? (
+                    <img src={contact.photo} alt={contact.name} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className={`w-full h-full flex items-center justify-center ${getAvatarColor(contact.id)}`}>
+                      <span className="text-white text-7xl font-bold">{getInitial(contact.name)}</span>
+                    </div>
+                  )}
+                  <div className="absolute bottom-2 right-2 h-12 w-12 rounded-full bg-white shadow-lg flex items-center justify-center">
+                    <Phone className="h-6 w-6 text-emerald-600" />
+                  </div>
                 </div>
-              )}
-              <div className="absolute bottom-2 right-2 h-12 w-12 rounded-full bg-white shadow-lg flex items-center justify-center">
-                <Phone className="h-6 w-6 text-emerald-600" />
-              </div>
-              {!contact.phone && (
+                <div className="text-center min-h-[2.5rem] flex items-center justify-center">
+                  <p className="text-xl font-bold text-[#431407]">{contact.name}</p>
+                </div>
+              </a>
+            );
+          }
+
+          return (
+            <button
+              key={contact.id}
+              onClick={() => handleNoPhone(contact)}
+              className="flex flex-col items-center gap-2 p-3 rounded-3xl bg-white shadow-md border border-orange-100 active:scale-[0.97] transition-all duration-150"
+            >
+              <div className="relative w-full aspect-square rounded-2xl overflow-hidden bg-orange-50">
+                {contact.photo ? (
+                  <img src={contact.photo} alt={contact.name} className="w-full h-full object-cover" />
+                ) : (
+                  <div className={`w-full h-full flex items-center justify-center ${getAvatarColor(contact.id)}`}>
+                    <span className="text-white text-7xl font-bold">{getInitial(contact.name)}</span>
+                  </div>
+                )}
+                <div className="absolute bottom-2 right-2 h-12 w-12 rounded-full bg-white shadow-lg flex items-center justify-center">
+                  <Phone className="h-6 w-6 text-emerald-600" />
+                </div>
                 <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
                   <span className="text-white text-sm font-semibold bg-black/40 px-3 py-1.5 rounded-full">Configurar</span>
                 </div>
-              )}
-            </div>
-            <div className="text-center min-h-[2.5rem] flex items-center justify-center">
-              <p className="text-xl font-bold text-[#431407]">{contact.name}</p>
-            </div>
-          </button>
-        ))}
+              </div>
+              <div className="text-center min-h-[2.5rem] flex items-center justify-center">
+                <p className="text-xl font-bold text-[#431407]">{contact.name}</p>
+              </div>
+            </button>
+          );
+        })}
 
         {contacts.length < 5 && (
           <button
@@ -578,20 +641,34 @@ export default function Home() {
             <DialogTitle className="text-2xl">Configurar</DialogTitle>
           </DialogHeader>
 
-          {voiceSupported && (
-            <div className="flex items-center justify-between p-4 rounded-2xl bg-emerald-50 border border-emerald-200 mb-2">
-              <div>
-                <p className="font-bold text-[#431407]">Voz</p>
+          {/* Voice toggle in settings */}
+          <div className={`flex items-center justify-between p-4 rounded-2xl border mb-2 ${
+            voiceStatus === 'not_supported'
+              ? 'bg-gray-50 border-gray-200'
+              : voiceStatus === 'denied'
+                ? 'bg-red-50 border-red-200'
+                : 'bg-emerald-50 border-emerald-200'
+          }`}>
+            <div>
+              <p className="font-bold text-[#431407]">Voz</p>
+              {voiceStatus === 'not_supported' ? (
+                <p className="text-sm text-gray-500">No disponible en este navegador</p>
+              ) : voiceStatus === 'denied' ? (
+                <p className="text-sm text-red-600">Microfono bloqueado</p>
+              ) : (
                 <p className="text-sm text-gray-500">Di el nombre para llamar</p>
-              </div>
-              <button
-                onClick={() => setVoiceEnabled(!voiceEnabled)}
-                className={`w-16 h-10 rounded-full transition-colors relative ${voiceEnabled ? 'bg-emerald-500' : 'bg-gray-300'}`}
-              >
-                <div className={`absolute top-1 w-8 h-8 rounded-full bg-white shadow transition-transform ${voiceEnabled ? 'translate-x-7' : 'translate-x-1'}`} />
-              </button>
+              )}
             </div>
-          )}
+            <button
+              onClick={toggleVoice}
+              disabled={voiceStatus === 'not_supported'}
+              className={`w-16 h-10 rounded-full transition-colors relative ${
+                voiceEnabled ? 'bg-emerald-500' : 'bg-gray-300'
+              } ${voiceStatus === 'not_supported' ? 'opacity-40' : ''}`}
+            >
+              <div className={`absolute top-1 w-8 h-8 rounded-full bg-white shadow transition-transform ${voiceEnabled ? 'translate-x-7' : 'translate-x-1'}`} />
+            </button>
+          </div>
 
           <p className="text-sm text-muted-foreground mb-2">
             Toca un contacto para editar foto, nombre o numero.
