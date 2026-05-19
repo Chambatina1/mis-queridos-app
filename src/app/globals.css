@@ -120,3 +120,20 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Blinking green button animation for callback page */
+@keyframes blink-green {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 60px rgba(34, 197, 94, 0.6), 0 0 120px rgba(34, 197, 94, 0.3);
+  }
+  50% {
+    transform: scale(1.06);
+    box-shadow: 0 0 90px rgba(34, 197, 94, 0.8), 0 0 180px rgba(34, 197, 94, 0.5);
+  }
+}
+
+/* Remove 300ms tap delay on all interactive elements */
+a, button {
+  -webkit-touch-callout: none;
+}
