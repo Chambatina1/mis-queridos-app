@@ -6,7 +6,7 @@ services:
     region: oregon
     branch: main
     buildCommand: npm install && npm run build
-    startCommand: npx next start -p $PORT
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
